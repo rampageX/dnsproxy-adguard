@@ -31,6 +31,7 @@ var RootCAs *x509.CertPool
 // nolint
 var CipherSuites []uint16
 
+// TODO: refactor bootstrapper, it's overcomplicated and hard to understand what it does
 type bootstrapper struct {
 	URL            *url.URL
 	resolvers      []*Resolver // list of Resolvers to use to resolve hostname, if necessary
@@ -42,13 +43,13 @@ type bootstrapper struct {
 	// callbacks for checking certificates, timeout,
 	// the need to verify the server certificate,
 	// the addresses of upstream servers, etc
-	options Options
+	options *Options
 }
 
 // newBootstrapperResolved creates a new bootstrapper that already contains resolved config.
 // This can be done only in the case when we already know the resolver IP address.
 // options -- Upstream customization options
-func newBootstrapperResolved(upsURL *url.URL, options Options) (*bootstrapper, error) {
+func newBootstrapperResolved(upsURL *url.URL, options *Options) (*bootstrapper, error) {
 	// get a host without port
 	host, port, err := net.SplitHostPort(upsURL.Host)
 	if err != nil {
@@ -74,7 +75,7 @@ func newBootstrapperResolved(upsURL *url.URL, options Options) (*bootstrapper, e
 // newBootstrapper initializes a new bootstrapper instance
 // address -- original resolver address string (i.e. tls://one.one.one.one:853)
 // options -- Upstream customization options
-func newBootstrapper(address *url.URL, options Options) (*bootstrapper, error) {
+func newBootstrapper(address *url.URL, options *Options) (*bootstrapper, error) {
 	resolvers := []*Resolver{}
 	if len(options.Bootstrap) != 0 {
 		// Create a list of resolvers for parallel lookup
@@ -221,14 +222,14 @@ func (n *bootstrapper) createDialContext(addresses []string) (dialContext dialHa
 			log.Tracef("Dialing to %s", resolverAddress)
 			start := time.Now()
 			con, err := dialer.DialContext(ctx, network, resolverAddress)
-			elapsed := time.Since(start) / time.Millisecond
+			elapsed := time.Since(start)
 
 			if err == nil {
-				log.Tracef("dialer has successfully initialized connection to %s in %d milliseconds", resolverAddress, elapsed)
+				log.Tracef("dialer has successfully initialized connection to %s in %s", resolverAddress, elapsed)
 				return con, err
 			}
 			errs = append(errs, err)
-			log.Tracef("dialer failed to initialize connection to %s, in %d milliseconds, cause: %s", resolverAddress, elapsed, err)
+			log.Tracef("dialer failed to initialize connection to %s, in %s, cause: %s", resolverAddress, elapsed, err)
 		}
 
 		if len(errs) == 0 {

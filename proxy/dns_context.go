@@ -14,7 +14,7 @@ import (
 
 // DNSContext represents a DNS request message context
 type DNSContext struct {
-	Proto     string            // "udp", "tcp", "tls", "https", "quic"
+	Proto     Proto
 	Req       *dns.Msg          // DNS request
 	Res       *dns.Msg          // DNS response from an upstream
 	Addr      net.Addr          // client address.
@@ -49,6 +49,11 @@ type DNSContext struct {
 	// ProtoQUIC only.
 	QUICSession quic.Session
 
+	// RequestID is an opaque numerical identifier of this request that is
+	// guaranteed to be unique across requests processed by a single Proxy
+	// instance.
+	RequestID uint64
+
 	ecsReqIP   net.IP // ECS IP used in request
 	ecsReqMask uint8  // ECS mask used in request
 
@@ -65,27 +70,21 @@ type DNSContext struct {
 
 // calcFlagsAndSize lazily calculates some values required for Resolve method.
 func (ctx *DNSContext) calcFlagsAndSize() {
-	if ctx.udpSize != 0 {
-		return
-	}
-
-	if ctx.Req == nil {
+	if ctx.udpSize != 0 || ctx.Req == nil {
 		return
 	}
 
 	ctx.adBit = ctx.Req.AuthenticatedData
+	ctx.udpSize = defaultUDPBufSize
 	if o := ctx.Req.IsEdns0(); o != nil {
 		ctx.hasEDNS0 = true
 		ctx.doBit = o.Do()
 		ctx.udpSize = o.UDPSize()
-
-		return
 	}
-
-	ctx.udpSize = defaultUDPBufSize
 }
 
-// scrub - prepares the d.Res to be written (truncates if necessary)
+// scrub prepares the d.Res to be written.  Truncation is applied as well if
+// necessary.
 func (ctx *DNSContext) scrub() {
 	if ctx.Res == nil || ctx.Req == nil {
 		return
@@ -93,10 +92,6 @@ func (ctx *DNSContext) scrub() {
 
 	// We should guarantee that all the values we need are calculated.
 	ctx.calcFlagsAndSize()
-
-	// Now if the request has DO bit set we only remove all the OPT
-	// RRs, and also all DNSSEC RRs otherwise.
-	filterMsg(ctx.Res, ctx.Res, ctx.adBit, ctx.doBit, 0)
 
 	// RFC-6891 (https://tools.ietf.org/html/rfc6891) states that response
 	// mustn't contain an EDNS0 RR if the request doesn't include it.
@@ -106,6 +101,7 @@ func (ctx *DNSContext) scrub() {
 		ctx.Res.SetEdns0(ctx.udpSize, ctx.doBit)
 	}
 
-	ctx.Res.Truncate(proxyutil.DNSSize(ctx.Proto, ctx.Req))
-	ctx.Res.Compress = true // some devices require DNS message compression
+	ctx.Res.Truncate(proxyutil.DNSSize(ctx.Proto == ProtoUDP, ctx.Req))
+	// Some devices require DNS message compression.
+	ctx.Res.Compress = true
 }

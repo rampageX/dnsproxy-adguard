@@ -26,6 +26,9 @@ type dnsOverQUIC struct {
 	sync.RWMutex            // protects session and bytesPool
 }
 
+// type check
+var _ Upstream = &dnsOverQUIC{}
+
 func (p *dnsOverQUIC) Address() string { return p.boot.URL.String() }
 
 func (p *dnsOverQUIC) Exchange(m *dns.Msg) (*dns.Msg, error) {
@@ -83,13 +86,11 @@ func (p *dnsOverQUIC) Exchange(m *dns.Msg) (*dns.Msg, error) {
 	_ = stream.Close()
 
 	pool := p.getBytesPool()
-	respBuf := pool.Get().([]byte)
+	bufPtr := pool.Get().(*[]byte)
 
-	// linter is not happy about allocating slice struct every time
-	// ignore it for now
-	// nolint
-	defer pool.Put(respBuf)
+	defer pool.Put(bufPtr)
 
+	respBuf := *bufPtr
 	n, err := stream.Read(respBuf)
 	if err != nil && n == 0 {
 		return nil, errorx.Decorate(err, "failed to read response from %s due to %v", p.Address(), err)
@@ -109,7 +110,9 @@ func (p *dnsOverQUIC) getBytesPool() *sync.Pool {
 	if p.bytesPool == nil {
 		p.bytesPool = &sync.Pool{
 			New: func() interface{} {
-				return make([]byte, dns.MaxMsgSize)
+				b := make([]byte, dns.MaxMsgSize)
+
+				return &b
 			},
 		}
 	}

@@ -24,7 +24,11 @@ type UpstreamConfig struct {
 // So the following config: ["[/host.com/]1.2.3.4", "[/www.host.com/]2.3.4.5", "[/maps.host.com/]#", "3.4.5.6"]
 // will send queries for *.host.com to 1.2.3.4, except for *.www.host.com, which will go to 2.3.4.5 and *.maps.host.com,
 // which will go to default server 3.4.5.6 with all other domains
-func ParseUpstreamsConfig(upstreamConfig []string, options upstream.Options) (UpstreamConfig, error) {
+func ParseUpstreamsConfig(upstreamConfig []string, options *upstream.Options) (*UpstreamConfig, error) {
+	if options == nil {
+		options = &upstream.Options{}
+	}
+
 	var upstreams []upstream.Upstream
 	domainReservedUpstreams := map[string][]upstream.Upstream{}
 
@@ -38,7 +42,7 @@ func ParseUpstreamsConfig(upstreamConfig []string, options upstream.Options) (Up
 	for i, l := range upstreamConfig {
 		u, hosts, err := parseUpstreamLine(l)
 		if err != nil {
-			return UpstreamConfig{}, err
+			return &UpstreamConfig{}, err
 		}
 
 		// # excludes more specific domain from reserved upstreams querying
@@ -50,15 +54,16 @@ func ParseUpstreamsConfig(upstreamConfig []string, options upstream.Options) (Up
 			dnsUpstream, ok := upstreamsIndex[u]
 			if !ok {
 				// create an upstream
-				dnsUpstream, err = upstream.AddressToUpstream(u,
-					upstream.Options{
+				dnsUpstream, err = upstream.AddressToUpstream(
+					u,
+					&upstream.Options{
 						Bootstrap:          options.Bootstrap,
 						Timeout:            options.Timeout,
 						InsecureSkipVerify: options.InsecureSkipVerify,
 					})
 				if err != nil {
 					err = fmt.Errorf("cannot prepare the upstream %s (%s): %s", l, options.Bootstrap, err)
-					return UpstreamConfig{}, err
+					return &UpstreamConfig{}, err
 				}
 
 				// save to the index
@@ -81,7 +86,7 @@ func ParseUpstreamsConfig(upstreamConfig []string, options upstream.Options) (Up
 			}
 		}
 	}
-	return UpstreamConfig{
+	return &UpstreamConfig{
 		Upstreams:               upstreams,
 		DomainReservedUpstreams: domainReservedUpstreams,
 	}, nil
@@ -126,26 +131,35 @@ func parseUpstreamLine(l string) (string, []string, error) {
 // If we are looking for domain mail.host.com, this method will return value of host.com key
 // If we are looking for domain www.host.com, this method will return value of www.host.com key
 // If more specific domain value is nil, it means that domain was excluded and should be exchanged with default upstreams
-func (uc *UpstreamConfig) getUpstreamsForDomain(host string) []upstream.Upstream {
+func (uc *UpstreamConfig) getUpstreamsForDomain(host string) (ups []upstream.Upstream) {
 	if len(uc.DomainReservedUpstreams) == 0 {
 		return uc.Upstreams
 	}
 
 	dotsCount := strings.Count(host, ".")
 	if dotsCount < 2 {
-		return uc.DomainReservedUpstreams[UnqualifiedNames]
+		host = UnqualifiedNames
+	} else {
+		host = strings.ToLower(host)
 	}
 
 	for i := 1; i <= dotsCount; i++ {
 		h := strings.SplitAfterN(host, ".", i)
 		name := h[i-1]
-		if u, ok := uc.DomainReservedUpstreams[strings.ToLower(name)]; ok {
-			if u == nil {
-				// domain was excluded from reserved upstreams querying
-				return uc.Upstreams
-			}
-			return u
+
+		var ok bool
+		ups, ok = uc.DomainReservedUpstreams[name]
+		if !ok {
+			continue
 		}
+
+		if len(ups) == 0 {
+			// The domain has been excluded from reserved upstreams
+			// querying.
+			return uc.Upstreams
+		}
+
+		return ups
 	}
 
 	return uc.Upstreams
